@@ -1,0 +1,101 @@
+# ============================================================================
+# Memory App + AT Protocol Bridge — Full Local Stack
+#
+# Runs everything you need to see the Memory app in your browser with live
+# AT Protocol federated content flowing in from the Mastopod sidecar.
+#
+# Services:
+#   pg        — PostgreSQL 17 database
+#   api       — Memory API (Elysia/Bun) on http://localhost:8794
+#   frontend  — Memory UI (Vite/Vue) on http://localhost:5173
+#   mastopod  — AT Protocol ingress pipeline (Phase 5.5 local harness)
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml up --build
+#
+# Then open: http://localhost:5173
+# ============================================================================
+
+services:
+
+  # --------------------------------------------------------------------------
+  # PostgreSQL — the database for the Memory API
+  # --------------------------------------------------------------------------
+  pg:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: localpassword
+      POSTGRES_DB: memory
+    ports:
+      - '5432:5432'
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # --------------------------------------------------------------------------
+  # Memory API — Elysia/Bun backend
+  # --------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.dockerfile
+    restart: unless-stopped
+    depends_on:
+      pg:
+        condition: service_healthy
+    ports:
+      - '8794:8794'
+    environment:
+      DB_URL: postgres://postgres:localpassword@pg:5432/memory
+      JWT_SECRET: local-dev-jwt-secret-change-in-prod
+      API_PORT: 8794
+      FRONTEND_URL: http://localhost:5173
+      FIREHOSE_BRIDGE_SECRET: local-bridge-secret-123
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:8794/health || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # --------------------------------------------------------------------------
+  # Memory Frontend — Vite/Vue dev server
+  # --------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.dockerfile
+      args:
+        VITE_API_URL: http://localhost:8794
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - '5173:5173'
+
+  # --------------------------------------------------------------------------
+  # Mastopod AT Protocol Ingress Pipeline (Phase 5.5 local harness)
+  # Runs the mock firehose + full ingress pipeline and forwards verified events
+  # to the Memory API webhook endpoint.
+  # --------------------------------------------------------------------------
+  mastopod:
+    build:
+      context: ../mastopod-federation-architecture/fedify-sidecar
+      dockerfile: Dockerfile.local
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      MEMORY_WEBHOOK_URL: http://api:8794/at/webhook/ingress
+      FIREHOSE_BRIDGE_SECRET: local-bridge-secret-123
+      # Set to 'true' to connect to the real Bluesky relay instead of the mock
+      USE_REAL_FIREHOSE: 'false'
+
+volumes:
+  pg_data:

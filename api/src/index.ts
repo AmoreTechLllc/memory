@@ -7,6 +7,8 @@ import atBridgeWebhookPlugin from './routes/atBridgeWebhook'
 export const db = drizzle({ connection: process.env.DB_URL || '', casing: 'snake_case' })
 
 export const app = new Elysia()
+  // Top-level health check — used by Docker healthcheck and the Mastopod harness
+  .get('/health', () => ({ status: 'ok', timestamp: new Date().toISOString() }))
   .use(setupPlugin)
   .macro({
     isSignedIn: enabled => {
