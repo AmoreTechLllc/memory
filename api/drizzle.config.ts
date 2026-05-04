@@ -5,6 +5,6 @@ export default defineConfig({
   schema: ['./src/db/schema.ts', './src/db/atBridgeSchema.ts'],
   dialect: 'postgresql',
   dbCredentials: {
-    url: process.env.DB_URL || 'postgres://postgres:postgres@pg:5432/postgres'
+    url: process.env.DB_URL || 'postgres://postgres:postgres@localhost:5432/postgres'
   }
 })
