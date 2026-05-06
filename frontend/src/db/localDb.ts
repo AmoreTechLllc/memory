@@ -153,3 +153,60 @@ async function applySchema(pg: PGliteWorker): Promise<void> {
       ON pending_writes (created_at ASC);
   `)
 }
+
+/**
+ * Wipe all user-data rows from the local PGlite database.
+ *
+ * Used for private logout: a subsequent user on the same device cannot read
+ * another account's cached posts, follows, or pending writes.
+ *
+ * The schema (table definitions, indexes) is preserved; only rows are removed.
+ * On next login, syncStore.syncFeed() will re-populate from the pod.
+ */
+export async function clearLocalData(): Promise<void> {
+  const pg = await getWorker()
+  await pg.exec(`
+    TRUNCATE
+      local_posts,
+      sync_state,
+      pending_writes,
+      local_follows,
+      local_bookmarks
+    RESTART IDENTITY CASCADE;
+  `)
+}
+
+/**
+ * Full device reset: drop the entire IndexedDB database.
+ *
+ * Used for device-reset logout mode (device handoff, security incident).
+ * The PGlite worker process is terminated; the DB is recreated on next boot.
+ */
+export async function clearAllAppStorage(): Promise<void> {
+  // Terminate the worker so PGlite releases its IndexedDB lock.
+  if (_worker) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (_worker as any).close?.()
+    } catch {
+      // Ignore close failures and continue best-effort cleanup.
+    }
+    _worker = null
+    _db = null
+    _initPromise = null
+  }
+
+  if (typeof indexedDB === 'undefined') {
+    return
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const req = indexedDB.deleteDatabase('paper-atproto-db')
+    req.onsuccess = () => resolve()
+    req.onerror = () => reject(req.error)
+    req.onblocked = () => {
+      // Another tab still has the DB open; resolve and allow eventual cleanup.
+      resolve()
+    }
+  })
+}

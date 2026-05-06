@@ -34,7 +34,7 @@ export const usePostsStore = defineStore('posts', () => {
       }
     })) as unknown as { data: SelectPost[]; status: number }
     if (status === 401) {
-      authStore.logout()
+      await authStore.logout('private')
     } else if (status === 200) {
       const newPosts = postResponse as SelectPost[]
       posts.value = newPosts

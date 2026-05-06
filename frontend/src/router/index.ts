@@ -170,8 +170,15 @@ const router = createRouter({
 const PUBLIC_ROUTES = new Set(['signin', 'signup', 'welcome', 'auth-callback'])
 
 router.beforeEach((to, _, next) => {
+  const authStore = useAuthStore()
+
+  // Fail closed: when secure logout cleanup failed, keep user on sign-in
+  // until local cleanup succeeds via retry.
+  if (authStore.logoutBlocked && to.name !== 'signin') {
+    return next({ name: 'signin' })
+  }
+
   if (!PUBLIC_ROUTES.has(String(to.name))) {
-    const authStore = useAuthStore()
     if (!authStore.isLoggedIn) {
       return next({ name: 'welcome' })
     }
