@@ -26,21 +26,23 @@ services:
       SEMAPPS_JENA_PASSWORD: admin
       SEMAPPS_APP_LANG: en
       SEMAPPS_MAPBOX_ACCESS_TOKEN: ${MAPBOX_ACCESS_TOKEN:?You must set it in the .env.local file}
+      SEMAPPS_FRONTEND_URL: 'http://localhost:5001'
     # Allow the Pod backend to access the app backend as localhost:3001
     # See https://docs.docker.com/network/drivers/host/
     network_mode: 'host'
 
-  #activitypods-frontend:
-  #  image: activitypods/frontend
-  #  depends_on:
-  #    - activitypods-backend
-  #  restart: always
-  #  ports:
-  #    - '5000:5000'
-  #  expose:
-  #    - '5000'
-  #  environment:
-  #    REACT_APP_CONFIG_URL: 'http://localhost:3000/.well-known/config.js'
+  activitypods-frontend:
+    image: activitypods/frontend
+    depends_on:
+      - activitypods-backend
+    restart: always
+    ports:
+      - '5000:5000'
+    expose:
+      - '5000'
+    environment:
+      REACT_APP_CONFIG_URL: 'http://localhost:3000/.well-known/config.js'
+    command: serve -s build -l 5000
   #mailcatcher:
   #  image: dockage/mailcatcher:0.7.1
   #  ports:
