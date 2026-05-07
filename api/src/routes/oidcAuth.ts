@@ -8,6 +8,7 @@ import { getTokenObject } from '../services/jwt'
 import { syncAtprotoIdentity } from '../services/WebIdProfileService'
 import { localeFromHeaders, translate } from '../i18n'
 import { toPublicUser } from '../services/PodTokenService'
+import { encryptToken } from '../services/TokenVault'
 
 /**
  * How long (in ms) to wait for the ATProto identity link before issuing the
@@ -126,9 +127,27 @@ const oidcAuthPlugin = new Elysia({ prefix: '/oidc-auth' })
             name: getNameFromWebId(webId),
             email: `${Buffer.from(webId).toString('base64url')}@memory.local`,
             webId,
-            providerEndpoint
+            providerEndpoint,
+            // Store the OIDC access_token as a fallback pod token.
+            // If the pod accepts Solid OIDC tokens for outbox writes this will
+            // work; otherwise the user must also sign in via /signin to store
+            // the pod-native JWT.
+            podToken: encryptToken(tokens.access_token)
           })
           .returning()
+      } else {
+        // Only update the pod token if the existing one is missing/empty.
+        // The pod-native JWT (stored by /signin) takes priority over the OIDC
+        // access_token because ActivityPods outbox writes require the native JWT.
+        const existingToken = dbUserRows[0].podToken
+        if (!existingToken) {
+          dbUserRows = await db
+            .update(users)
+            .set({ podToken: encryptToken(tokens.access_token) })
+            .where(eq(users.webId, webId))
+            .returning()
+        }
+        // If a pod-native token already exists, leave it untouched.
       }
       let dbUser = dbUserRows[0]
 
