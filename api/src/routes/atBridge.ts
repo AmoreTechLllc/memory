@@ -750,33 +750,40 @@ async function queryFeedCandidates(params: {
   const includeAp = !source || source === 'all' || source === 'activitypods'
   const normalizedTag = hashtag ? normalizeHashtag(hashtag) : null
 
-  const atFilters: SQL[] = [sql`ap.is_public = true`]
-  const apFilters: SQL[] = [sql`p.is_public = true`]
+  // Build query as a plain string with inline params to avoid Drizzle template
+  // parser misinterpreting PostgreSQL array path literals like '{subject,uri}'
+  const lim = String(fetchLimit) // safe integer, inline directly
+  const esc = (v: string) => `'${v.replace(/'/g, "''")}'` // SQL string escape
+
+  // Per-source WHERE clauses
+  const atWhereParts: string[] = ['ap.is_public = true']
+  const apWhereParts: string[] = ['p.is_public = true']
 
   if (normalizedTag) {
     const tagPattern = `%${normalizedTag}%`
-    atFilters.push(sql`(ap.content ILIKE ${tagPattern} OR ap.hashtags @> ARRAY[${normalizedTag}]::text[])`)
-    apFilters.push(sql`(p.content ILIKE ${tagPattern} OR p.hashtags @> ARRAY[${normalizedTag}]::text[])`)
+    atWhereParts.push(`(ap.content ILIKE ${esc(tagPattern)} OR ap.hashtags @> ARRAY[${esc(normalizedTag)}]::text[])`)
+    apWhereParts.push(`(p.content ILIKE ${esc(tagPattern)} OR p.hashtags @> ARRAY[${esc(normalizedTag)}]::text[])`)
   }
   if (sinceDate) {
-    atFilters.push(sql`ap.created_at > ${sinceDate}`)
-    apFilters.push(sql`p.created_at > ${sinceDate}`)
+    const isoDate = sinceDate.toISOString()
+    atWhereParts.push(`ap.created_at > ${esc(isoDate)}::timestamptz`)
+    apWhereParts.push(`p.created_at > ${esc(isoDate)}::timestamptz`)
   }
 
-  const atWhere = sql.join(atFilters, sql` AND `)
-  const apWhere = sql.join(apFilters, sql` AND `)
+  const atWhere = atWhereParts.join(' AND ')
+  const apWhere = apWhereParts.join(' AND ')
 
-  const cteFragments: SQL[] = []
-  const unionArms: SQL[] = []
+  const cteFragments: string[] = []
+  const unionArms: string[] = []
 
   if (includeAt) {
-    cteFragments.push(sql`at_limited AS MATERIALIZED (
+    cteFragments.push(`at_limited AS MATERIALIZED (
       SELECT
         ap.id, ap.content, COALESCE(ap.hashtags, ARRAY[]::text[]) AS hashtags,
         ap.post_type, ap.title, ap.summary, ap.canonical_url,
         (CASE
           WHEN jsonb_typeof(ap.embeds) = 'array' THEN jsonb_array_length(ap.embeds) > 0
-          WHEN jsonb_typeof(ap.embeds) = 'object' THEN jsonb_object_length(ap.embeds) > 0
+          WHEN jsonb_typeof(ap.embeds) = 'object' THEN (SELECT COUNT(*) > 0 FROM jsonb_object_keys(ap.embeds))
           ELSE false
         END) AS has_media,
         ap.created_at, ap.is_public,
@@ -792,13 +799,13 @@ async function queryFeedCandidates(params: {
       LEFT JOIN at_identities ai ON ap.author_did = ai.did
       WHERE ${atWhere}
       ORDER BY LEAST(ap.created_at, NOW()) DESC
-      LIMIT ${fetchLimit}
-    `)
-    unionArms.push(sql`SELECT * FROM at_limited`)
+      LIMIT ${lim}
+    )`)
+    unionArms.push('SELECT * FROM at_limited')
   }
 
   if (includeAp) {
-    cteFragments.push(sql`ap_limited AS MATERIALIZED (
+    cteFragments.push(`ap_limited AS MATERIALIZED (
       SELECT
         p.id, p.content, p.hashtags,
         p.post_type, p.name AS title, p.summary,
@@ -815,11 +822,11 @@ async function queryFeedCandidates(params: {
       JOIN users u ON p.author_id = u.id
       WHERE ${apWhere}
       ORDER BY p.created_at DESC
-      LIMIT ${fetchLimit}
+      LIMIT ${lim}
     )`)
-    unionArms.push(sql`SELECT * FROM ap_limited`)
+    unionArms.push('SELECT * FROM ap_limited')
 
-    cteFragments.push(sql`ap_remote_limited AS MATERIALIZED (
+    cteFragments.push(`ap_remote_limited AS MATERIALIZED (
       SELECT
         apr.id, apr.content,
         COALESCE(apr.hashtags, ARRAY[]::text[]) AS hashtags,
@@ -837,22 +844,22 @@ async function queryFeedCandidates(params: {
       FROM ap_remote_posts apr
       WHERE apr.is_public = true
       ORDER BY apr.created_at DESC
-      LIMIT ${fetchLimit}
+      LIMIT ${lim}
     )`)
-    unionArms.push(sql`SELECT * FROM ap_remote_limited`)
+    unionArms.push('SELECT * FROM ap_remote_limited')
   }
 
-  cteFragments.push(sql`combined AS MATERIALIZED (
-    ${sql.join(unionArms, sql` UNION ALL `)}
+  cteFragments.push(`combined AS MATERIALIZED (
+    ${unionArms.join(' UNION ALL ')}
   )`)
 
-  cteFragments.push(sql`candidate_uris AS MATERIALIZED (
+  cteFragments.push(`candidate_uris AS MATERIALIZED (
     SELECT DISTINCT c.candidate_uri
     FROM combined c
     WHERE c.candidate_uri IS NOT NULL
   )`)
 
-  cteFragments.push(sql`like_counts AS MATERIALIZED (
+  cteFragments.push(`like_counts AS MATERIALIZED (
     SELECT
       ar.record #>> '{subject,uri}' AS subject_uri,
       COUNT(*)::integer AS like_count
@@ -863,10 +870,9 @@ async function queryFeedCandidates(params: {
     GROUP BY 1
   )`)
 
-  cteFragments.push(sql`quote_counts AS MATERIALIZED (
+  cteFragments.push(`quote_counts AS MATERIALIZED (
     SELECT subject_uri, SUM(quote_count)::integer AS quote_count
     FROM (
-      -- AT Protocol quote-posts (embed paths)
       SELECT
         COALESCE(
           ap.embeds #>> '{record,uri}',
@@ -891,7 +897,6 @@ async function queryFeedCandidates(params: {
         ) IN (SELECT candidate_uri FROM candidate_uris)
       GROUP BY 1
       UNION ALL
-      -- ActivityPub native quote-posts (quoteUrl / FEP-e232 / Misskey fields)
       SELECT
         apr.quoted_post_uri AS subject_uri,
         COUNT(*)::integer AS quote_count
@@ -903,8 +908,8 @@ async function queryFeedCandidates(params: {
     GROUP BY subject_uri
   )`)
 
-  const fullQuery = sql`
-    WITH ${sql.join(cteFragments, sql`, `)}
+  const fullQueryText = `
+    WITH ${cteFragments.join(', ')}
     SELECT
       c.*,
       te.parent_author_id AS thread_parent_author_id,
@@ -920,10 +925,10 @@ async function queryFeedCandidates(params: {
     LEFT JOIN like_counts lc ON lc.subject_uri = c.candidate_uri
     LEFT JOIN quote_counts qc ON qc.subject_uri = c.candidate_uri
     ORDER BY LEAST(c.created_at, NOW()) DESC
-    LIMIT ${fetchLimit}
+    LIMIT ${lim}
   `
 
-  const result = await db.execute(fullQuery)
+  const result = await db.execute(sql.raw(fullQueryText))
   const rows = (result as unknown as { rows: Record<string, unknown>[] }).rows
   const postRows = rows.map(mapDbRowToFeedRow)
   const repostRows = await loadRepostCandidateRows({

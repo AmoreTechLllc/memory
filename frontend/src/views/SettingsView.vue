@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { useI18n } from '@/i18n'
 import { useNotificationsStore } from '@/stores/notificationsStore'
+import { useAuthStore } from '@/stores/authStore'
 
 const { availableLocales, locale, setLocale, t } = useI18n()
 const notificationsStore = useNotificationsStore()
+const authStore = useAuthStore()
 
 function onLocaleChange(event: Event) {
   const target = event.target as HTMLSelectElement | null
@@ -116,5 +118,13 @@ function onWindowHoursChange(event: Event) {
       <h3 class="text-base font-semibold">{{ t('settings.cards.moderation.title') }}</h3>
       <p class="text-caption mt-1">{{ t('settings.cards.moderation.description') }}</p>
     </RouterLink>
+
+    <button
+      class="rounded-default bg-red-50 p-[var(--padding-main)] hover:bg-red-100 transition-colors text-left w-full"
+      @click="authStore.logout()"
+    >
+      <h3 class="text-base font-semibold text-red-600">Sign out</h3>
+      <p class="text-caption mt-1 text-red-400">Sign out of your account</p>
+    </button>
   </div>
 </template>
