@@ -33,3 +33,8 @@ yalc.lock
 .env.*.local
 
 *.sqlite
+
+# Internal implementation notes and non-public development planning docs.
+# These files may contain evolving architecture plans, migration checklists,
+# or local implementation notes that should not be added accidentally.
+/docs/internal/
